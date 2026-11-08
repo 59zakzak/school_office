@@ -284,7 +284,12 @@ a{color:inherit}
 .seg{display:inline-flex;background:var(--soft);border-radius:999px;padding:3px;margin:-4px 0 10px}
 .seg button{border:0;background:none;border-radius:999px;padding:4px 12px;font-size:12.5px;font-weight:700;color:var(--ink-2)}
 .seg button[aria-selected="true"]{background:var(--sheet);color:var(--pine);box-shadow:0 1px 3px rgba(0,0,0,.12)}
-.sched .kd{font-size:10.5px;font-weight:800;color:var(--tab-meal);border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-right:5px;vertical-align:1px}
+.sched .kd{font-size:10.5px;font-weight:800;color:var(--kinder-ink,#D9772B);border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-right:5px;vertical-align:1px}
+.sched .kd.el{color:var(--elem-ink,#2F9BD8)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--elem-ink:#6CC4F2}}
+:root[data-skin="pastel"]{--elem-ink:#5B9BD8;--kinder-ink:#E0785C}
+:root[data-skin="cafe"]{--elem-ink:#5F8597;--kinder-ink:#A86A3A}
+:root[data-skin="cute"]{--elem-ink:#2E9BE0;--kinder-ink:#F07F22}
 .dishes{list-style:none;padding:0;columns:2;column-gap:14px}
 .dishes li{padding:6px 0;border-bottom:1px solid var(--rule);break-inside:avoid;display:flex;align-items:baseline;min-width:0;white-space:nowrap;overflow:hidden}
 .dishes .dn{flex:0 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis}   /* 메뉴명은 최대한 다 보이게 */
@@ -739,13 +744,19 @@ var LINKS = [
         if (W.every(function (w, k) { return String(v[r][c + k]).trim() === w; })) found = c;
     return found;
   }
+  // 안내 사항: [교장] 칸(위)과 [행정실] 칸(아래)이 나뉘어 있어도, 한 칸에 같이 있어도 모두 합침
+  function joinNotice(a, b) {
+    a = String(a || "").trim(); b = String(b || "").trim();
+    if (!b || a.indexOf(b) >= 0) return a;
+    return a ? a + "\n\n" + b : b;
+  }
   function rawFromSheet(v, y, m, d) {
     var first = new Date(y, m - 1, 1).getDay(), week = Math.floor((d + first - 1) / 7) + 1, dow = new Date(y, m - 1, d).getDay();
     var label = m + "월" + week + "주안내사항", col = calStart(v) + dow;
     var cell = function (r, c) { return r < v.length ? String(v[r][c] || "") : ""; };
     for (var r = 0; r < v.length; r++) {
       if (String(v[r][0] || "").replace(/\s/g, "").indexOf(label) === 0)
-        return { found: true, upper: cell(r + 1, col), act: cell(r + 2, col), life: cell(r + 3, col), notice: cell(r + 1, 0), week: m + "월 " + week + "주" };
+        return { found: true, upper: cell(r + 1, col), act: cell(r + 2, col), life: cell(r + 3, col), notice: joinNotice(cell(r + 1, 0), cell(r + 2, 0)), week: m + "월 " + week + "주" };
     }
     return { found: false, missing: true };
   }
@@ -1309,15 +1320,15 @@ var LINKS = [
       var school = pickEvents(lists[0], false);
       var kinder = pickEvents(lists[1], true).concat(lists[2]);
       var kseen = {}; kinder = kinder.filter(function (r) { if (kseen[r.EVENT_NM]) return false; kseen[r.EVENT_NM] = 1; return true; });
-      // 날짜순으로 5개. 유치원 일정이 학교 일정을 다 밀어내지 않도록 유치원은 최대 3개까지
+      // 날짜순으로 5개. 유치원 일정은 최대 2개까지
       var byDate = function (a, b) { return a.AA_YMD < b.AA_YMD ? -1 : a.AA_YMD > b.AA_YMD ? 1 : (a.kinder ? 1 : -1); };
       kinder.sort(byDate); school.sort(byDate);
-      var kMax = Math.max(SCHED_MAX - school.length, Math.min(3, kinder.length));
+      var kMax = Math.min(2, kinder.length);
       var ev = school.concat(kinder.slice(0, kMax)).sort(byDate).slice(0, SCHED_MAX);
       if (!ev.length) { body.innerHTML = '<div class="state">나이스에 등록된 남은 학사일정이 없습니다.</div>'; return; }
       body.innerHTML = '<ul class="sched">' + ev.map(function (r) {
         var today = r.AA_YMD === compact(t);
-        return '<li class="' + (today ? "today" : "") + '"><span class="d">' + (today ? "오늘" : Number(r.AA_YMD.slice(4, 6)) + "/" + Number(r.AA_YMD.slice(6, 8))) + ' <small>(' + DOW[new Date(+r.AA_YMD.slice(0, 4), +r.AA_YMD.slice(4, 6) - 1, +r.AA_YMD.slice(6, 8)).getDay()] + ")</small>" + "</span><span class=\"ev\" title=\"" + esc(r.full || r.EVENT_NM) + "\">" + (r.kinder ? '<span class="kd">유치원</span>' : "") + esc(r.EVENT_NM) + "</span></li>";
+        return '<li class="' + (today ? "today" : "") + '"><span class="d">' + (today ? "오늘" : Number(r.AA_YMD.slice(4, 6)) + "/" + Number(r.AA_YMD.slice(6, 8))) + ' <small>(' + DOW[new Date(+r.AA_YMD.slice(0, 4), +r.AA_YMD.slice(4, 6) - 1, +r.AA_YMD.slice(6, 8)).getDay()] + ")</small>" + "</span><span class=\"ev\" title=\"" + esc(r.full || r.EVENT_NM) + "\">" + (r.kinder ? '<span class="kd">유치원</span>' : '<span class="kd el">초등</span>') + esc(r.EVENT_NM) + "</span></li>";
       }).join("") + "</ul>";
     } catch (e) { failBox(body, "학사일정을 불러오지 못했습니다", loadSchedule); }
   }
