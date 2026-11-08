@@ -543,7 +543,7 @@ dialog.popup{width:min(460px,calc(100% - 28px));border-radius:var(--r);backgroun
 
     <section class="folder" id="sched" aria-labelledby="schedH">
       <div class="tab">학사일정</div>
-      <div class="head"><h2 id="schedH">다가오는 학사일정</h2><span class="src">나이스</span></div>
+      <div class="head"><h2 id="schedH">다가오는 학사일정</h2><span class="src" title="학교: 나이스 · 유치원: 월중계획">나이스 · 월중계획</span></div>
       <div id="schedBody"><div class="skel"></div><div class="skel"></div></div>
     </section>
     </div>
@@ -706,8 +706,8 @@ var LINKS = [
      월 탭('11월' 등, B1에 연도) · 주마다 4줄:
      [N월 N주 안내 사항] / [A열 안내 사항 + 위쪽 칸(주간반복)] / [아래쪽 칸(교육활동)] / [생활력]          */
   var monthCache = {};
-  async function gviz(name) {
-    var url = "https://docs.google.com/spreadsheets/d/" + CONFIG.SHEET_ID + "/gviz/tq?tqx=out:json&headers=0&sheet=" + encodeURIComponent(name);
+  async function gviz(name, range) {
+    var url = "https://docs.google.com/spreadsheets/d/" + CONFIG.SHEET_ID + "/gviz/tq?tqx=out:json&headers=0&sheet=" + encodeURIComponent(name) + (range ? "&range=" + range : "");
     var ctrl = new AbortController(), t = setTimeout(function () { ctrl.abort(); }, 9000);
     try {
       var text = await (await fetch(url, { signal: ctrl.signal })).text();
@@ -811,7 +811,7 @@ var LINKS = [
   }
   var routineGrid;
   function routineFromGrid(dow) {
-    routineGrid = routineGrid || gviz("주간반복").catch(function () { return null; });
+    routineGrid = routineGrid || gviz("주간반복", "A1:H6").catch(function () { return null; });   // 날짜 칸이 섞이면 공개 시트가 '월' 열 글자를 비워 버려서 위쪽 6줄만 읽음
     return routineGrid.then(function (v) {
       if (!v) return null;
       var head = v.findIndex(function (r) { return String(r[0] || "").trim() === "요일"; }); if (head < 0) return null;
@@ -1280,6 +1280,17 @@ var LINKS = [
     }
     return rows;
   }
+  // 나이스에는 병설유치원 학사일정이 없어서, 월중계획에서 '유치원'이 들어간 일정을 대신 가져옴(Apps Script 연결 시)
+  async function kinderFromSheet() {
+    if (!CONFIG.API_URL) return [];
+    try {
+      var j = await fetchJSON(CONFIG.API_URL + "?action=kinder&from=" + todayStr() + "&days=120", null, 30000);
+      if (!j || !j.success) return [];
+      return (j.items || []).map(function (x) {
+        return { AA_YMD: compact(x.date), EVENT_NM: x.text.replace(/^소규모\s*유치원\s*/, "").replace(/^유치원\s*/, ""), kinder: true, full: x.text };
+      });
+    } catch (e) { return []; }
+  }
   function pickEvents(rows, kinder) {
     var seen = {};
     return rows.filter(function (r) { return r.EVENT_NM && r.EVENT_NM !== "토요휴업일"; })
@@ -1292,15 +1303,21 @@ var LINKS = [
       var codes = await Promise.all([schoolCode(), kinderCode()]);
       var lists = await Promise.all([
         scheduleRows(codes[0]),
-        codes[1] && codes[1] !== codes[0] ? scheduleRows(codes[1]).catch(function () { return []; }) : Promise.resolve([])
+        codes[1] && codes[1] !== codes[0] ? scheduleRows(codes[1]).catch(function () { return []; }) : Promise.resolve([]),
+        kinderFromSheet()
       ]);
-      var ev = pickEvents(lists[0], false).concat(pickEvents(lists[1], true))
-        .sort(function (a, b) { return a.AA_YMD < b.AA_YMD ? -1 : a.AA_YMD > b.AA_YMD ? 1 : (a.kinder ? 1 : -1); })
-        .slice(0, SCHED_MAX);
+      var school = pickEvents(lists[0], false);
+      var kinder = pickEvents(lists[1], true).concat(lists[2]);
+      var kseen = {}; kinder = kinder.filter(function (r) { if (kseen[r.EVENT_NM]) return false; kseen[r.EVENT_NM] = 1; return true; });
+      // 날짜순으로 5개. 유치원 일정이 학교 일정을 다 밀어내지 않도록 유치원은 최대 3개까지
+      var byDate = function (a, b) { return a.AA_YMD < b.AA_YMD ? -1 : a.AA_YMD > b.AA_YMD ? 1 : (a.kinder ? 1 : -1); };
+      kinder.sort(byDate); school.sort(byDate);
+      var kMax = Math.max(SCHED_MAX - school.length, Math.min(3, kinder.length));
+      var ev = school.concat(kinder.slice(0, kMax)).sort(byDate).slice(0, SCHED_MAX);
       if (!ev.length) { body.innerHTML = '<div class="state">나이스에 등록된 남은 학사일정이 없습니다.</div>'; return; }
       body.innerHTML = '<ul class="sched">' + ev.map(function (r) {
         var today = r.AA_YMD === compact(t);
-        return '<li class="' + (today ? "today" : "") + '"><span class="d">' + (today ? "오늘" : Number(r.AA_YMD.slice(4, 6)) + "/" + Number(r.AA_YMD.slice(6, 8))) + ' <small>(' + DOW[new Date(+r.AA_YMD.slice(0, 4), +r.AA_YMD.slice(4, 6) - 1, +r.AA_YMD.slice(6, 8)).getDay()] + ")</small>" + "</span><span class=\"ev\" title=\"" + esc(r.EVENT_NM) + "\">" + (r.kinder ? '<span class="kd">유치원</span>' : "") + esc(r.EVENT_NM) + "</span></li>";
+        return '<li class="' + (today ? "today" : "") + '"><span class="d">' + (today ? "오늘" : Number(r.AA_YMD.slice(4, 6)) + "/" + Number(r.AA_YMD.slice(6, 8))) + ' <small>(' + DOW[new Date(+r.AA_YMD.slice(0, 4), +r.AA_YMD.slice(4, 6) - 1, +r.AA_YMD.slice(6, 8)).getDay()] + ")</small>" + "</span><span class=\"ev\" title=\"" + esc(r.full || r.EVENT_NM) + "\">" + (r.kinder ? '<span class="kd">유치원</span>' : "") + esc(r.EVENT_NM) + "</span></li>";
       }).join("") + "</ul>";
     } catch (e) { failBox(body, "학사일정을 불러오지 못했습니다", loadSchedule); }
   }
@@ -1312,14 +1329,17 @@ var LINKS = [
     LINKS.forEach(function (cat) { cat.items.forEach(function (it) { out.push({ id: "d" + (n++), category: cat.category, icon: it.icon, title: it.title, desc: it.desc, url: it.url }); }); });
     return out;
   }
-  async function loadLinks() {
+  async function loadLinks(tries) {
+    tries = tries || 0;
     if (CONFIG.API_URL) {
       try {
-        var j = await fetchJSON(CONFIG.API_URL + "?action=links", null, 15000);
+        var j = await fetchJSON(CONFIG.API_URL + "?action=links", null, 30000);
         if (j && j.success && j.links) { state.links = j.links; state.linksShared = true; renderLinks(); return; }
-      } catch (e) { /* 기본 목록으로 */ }
+      } catch (e) { /* 아래에서 기본 목록을 먼저 보여 주고 다시 시도 */ }
     }
-    state.links = defaultLinks(); state.linksShared = false; renderLinks();
+    if (!state.linksShared) { state.links = defaultLinks(); renderLinks(); }
+    // Apps Script가 처음 깨어날 때 늦게 응답하는 경우가 있어 몇 번 더 시도(성공하면 [편집] 버튼이 나타남)
+    if (CONFIG.API_URL && tries < 3) setTimeout(function () { loadLinks(tries + 1); }, 6000 * (tries + 1));
   }
   // 월중계획 주소: 보고 있는 날짜의 월 탭으로 바로 열기
   function sheetUrl(dateStr) {
