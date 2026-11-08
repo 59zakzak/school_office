@@ -837,6 +837,7 @@ var LINKS = [
     return store("yg:checks:" + date) || {};
   }
   async function toggle(it, on) {
+    state.chkStamp = Date.now();
     if (!state.name) { askName(function () { toggle(it, on); }); return; }
     var date = state.date, prev = JSON.parse(JSON.stringify(state.checks));
     var list = (state.checks[it.id] || []).filter(function (n) { return n !== state.name; });
@@ -854,26 +855,62 @@ var LINKS = [
 
   /* ── 공지 그리기 ── */
   function dayLabel(s) { var d = toDate(s); return (d.getMonth() + 1) + "월 " + d.getDate() + "일 (" + DOW[d.getDay()] + ")"; }
+  /* ── 빠르게 보이기: ① 이 기기에 저장해 둔 지난 내용 즉시 → ② 공개 시트(gviz) → ③ Apps Script 최신본 ── */
+  var rawMem = {}, loadToken = 0;
+  function rawGet(d) { if (rawMem[d]) return rawMem[d]; var c = store("yg:raw:" + d); if (c && c.raw) { rawMem[d] = c.raw; return c.raw; } return null; }
+  function rawPut(d, raw) { if (!raw) return; rawMem[d] = raw; store("yg:raw:" + d, { t: Date.now(), raw: raw }); }
+  async function apiRaws(dates) {
+    var j = await fetchJSON(CONFIG.API_URL + "?action=days&dates=" + dates.join(","), null, 25000);
+    if (!j || !j.success) throw new Error((j && j.message) || "api");
+    return dates.map(function (d) { rawPut(d, j.days[d]); return j.days[d]; });
+  }
+  function gvizRaws(dates) {
+    return Promise.all(dates.map(async function (d) {
+      var dt = toDate(d), y = dt.getFullYear(), m = dt.getMonth() + 1, v = await monthValues(y, m);
+      var raw = v ? rawFromSheet(v, y, m, dt.getDate()) : { found: false, missing: true };
+      if (raw.found) raw.routine = await routineFromGrid(dt.getDay());
+      return raw;
+    }));
+  }
   async function loadDay() {
-    var date = state.date, isToday = date === todayStr();
+    var date = state.date, isToday = date === todayStr(), token = ++loadToken, started = Date.now(), shown = false, final = false;
     $("dayLab").textContent = dayLabel(date);
     $("noticeH").textContent = isToday ? "오늘의 교육활동" : "교육활동";
     $("addDate").value = date;
     $("sheetLink").href = sheetUrl(date); refreshMonthLinks();
-    $("noticeBody").innerHTML = '<div class="skel"></div><div class="skel" style="width:70%"></div>';
-    $("chips").textContent = ""; $("duty").hidden = true; $("meter").hidden = true;
-    try {
-      var week = weekDates(date), want = week.indexOf(date) >= 0 ? week : week.concat([date]);
-      var res = await Promise.all([readDays(want), loadChecks(date)]);
-      if (date !== state.date) return;
-      var days = res[0];
-      if (days[want.indexOf(date)].error) throw new Error("read");
-      state.day = days[want.indexOf(date)]; state.checks = res[1];
+    var week = weekDates(date), want = week.indexOf(date) >= 0 ? week : week.concat([date]), idx = want.indexOf(date);
+    var cachedChecks = store("yg:chk:" + date) || {};
+    function apply(raws, checks) {
+      if (token !== loadToken) return;
+      var days = raws.map(function (r, i) { return dayFromRaw(want[i], r); });
+      state.day = days[idx];
+      if (!(state.chkStamp > started)) state.checks = checks || {};
+      if (state.editing && shown) return;               // 수정 중이면 화면을 흔들지 않음
+      renderNotice(); renderWeek(days.slice(0, 5)); shown = true;
       if (!$("wkPop").hidden) renderWeekNotice();
-      renderNotice(); renderWeek(days.slice(0, 5));
+    }
+    // ① 저장해 둔 내용이 있으면 바로 보여 줌
+    var cached = want.map(rawGet);
+    if (cached[idx]) apply(cached.map(function (r) { return r || { found: false }; }), cachedChecks);
+    else {
+      $("noticeBody").innerHTML = '<div class="skel"></div><div class="skel" style="width:70%"></div>';
+      $("chips").textContent = ""; $("duty").hidden = true; $("meter").hidden = true;
+    }
+    var chkP = loadChecks(date).then(function (c) { store("yg:chk:" + date, c); return c; }).catch(function () { return state.checks; });
+    var gvP = gvizRaws(want);
+    // ② 공개 시트가 먼저 오면 임시로 보여 줌(Apps Script가 오면 덮어씀)
+    gvP.then(async function (r) { if (final) return; var c = shown ? state.checks : await chkP; if (!final) apply(r, c); }).catch(function () {});
+    try {
+      if (!CONFIG.API_URL) throw new Error("no api");
+      var r = await apiRaws(want); final = true;
+      apply(r, await chkP);
     } catch (e) {
-      failBox($("noticeBody"), "월중계획을 불러오지 못했습니다", loadDay);
-      $("noticeBody").appendChild(el("p", "src", "시트가 '링크가 있는 모든 사용자(뷰어)'로 공유되어 있는지 확인해 주세요."));
+      try { var r2 = await gvP; final = true; r2.forEach(function (x, i) { rawPut(want[i], x); }); apply(r2, await chkP); }
+      catch (e2) {
+        if (shown || token !== loadToken) return;
+        failBox($("noticeBody"), "월중계획을 불러오지 못했습니다", loadDay);
+        $("noticeBody").appendChild(el("p", "src", "시트가 '링크가 있는 모든 사용자'로 공유되어 있는지 확인해 주세요."));
+      }
     }
   }
   // 체크한 사람이 많아 한 줄을 넘으면 이름만 오른쪽→왼쪽으로 흐르게(먼저 체크한 사람이 앞)
@@ -983,6 +1020,7 @@ var LINKS = [
       body: JSON.stringify(Object.assign({ name: state.name }, payload)) }, 20000);
     if (!j || !j.success) throw new Error((j && j.message) || "저장하지 못했습니다");
     delete monthCache[toDate(payload.date).getFullYear() + "." + (toDate(payload.date).getMonth() + 1)];
+    if (j.day) rawPut(payload.date, j.day);
     if (payload.date === state.date && j.day) {
       state.day = dayFromRaw(payload.date, j.day);
       renderNotice();
