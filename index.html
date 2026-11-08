@@ -286,8 +286,9 @@ a{color:inherit}
 .seg button[aria-selected="true"]{background:var(--sheet);color:var(--pine);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .sched .kd{font-size:10.5px;font-weight:800;color:var(--tab-meal);border:1px solid currentColor;border-radius:4px;padding:0 4px;margin-right:5px;vertical-align:1px}
 .dishes{list-style:none;padding:0;columns:2;column-gap:14px}
-.dishes li{padding:6px 0;border-bottom:1px solid var(--rule);break-inside:avoid}
-.dishes sup{font-size:10px;color:var(--muted);margin-left:3px}
+.dishes li{padding:6px 0;border-bottom:1px solid var(--rule);break-inside:avoid;display:flex;align-items:baseline;min-width:0;white-space:nowrap;overflow:hidden}
+.dishes .dn{flex:0 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis}   /* 메뉴명은 최대한 다 보이게 */
+.dishes sup{font-size:10px;color:var(--muted);margin-left:3px;flex:1 1 0;min-width:0;overflow:hidden;text-overflow:clip;white-space:nowrap;vertical-align:baseline;position:relative;top:-.45em}   /* 남는 자리만큼만 알레르기 번호 */
 .kcal{font-size:12.5px;color:var(--muted);margin-top:8px}
 
 /* ── 학사일정 / 주간 ── */
@@ -612,14 +613,14 @@ var CONFIG = {
   NEIS_KINDER_NAME: "유곡초등학교병설유치원",
   NEIS_KINDER_ORG_ID: "S100001927", // 유곡초등학교병설유치원 나이스 기관아이디
   NEIS_SCHOOL_CODE: "",            // 나이스 Open API 학교코드를 알면 직접 입력(비우면 위 기관아이디 → 학교 이름 순으로 자동 확인)
-  NEIS_KEY: "",
+  NEIS_KEY: "0a97848fd07a489fbd81747a851ff5f6",
   // 웹 푸시 알림(OneSignal 무료). 앱 ID를 넣으면 상단에 '🔔 알림 켜기' 버튼이 생깁니다.
   ONESIGNAL_APP_ID: "",                    // 나이스 인증키(선택)
   PLACE: "의령군 유곡면",
   LAT: 35.430, LON: 128.320,
   // Apps Script 웹앱 /exec 주소. 넣으면 ① 일정 추가·수정·삭제가 실제 월중계획 시트에 저장되고
   // ② 체크 현황이 모든 선생님께 공유됩니다. 비워두면 읽기 전용 + 체크는 각자 기기에만 저장됩니다.
-  API_URL: "https://script.google.com/macros/s/AKfycbwzd6BoyF_yBv39SOdb1_ArYGlIILupXmmBZTtUFzvxOxFQ-5XSsCMnHVS9HU21eDXd/exec"
+  API_URL: ""https://script.google.com/macros/s/AKfycbwzd6BoyF_yBv39SOdb1_ArYGlIILupXmmBZTtUFzvxOxFQ-5XSsCMnHVS9HU21eDXd/exe"
 };
 
 var LINKS = [
@@ -1228,7 +1229,7 @@ var LINKS = [
       if (!rows.length) { body.innerHTML = '<div class="state"><b>급식이 없는 날입니다</b>나이스에 등록된 식단이 없어요.</div>'; return; }
       body.innerHTML = rows.map(function (r) {
         return (rows.length > 1 ? '<div class="src" style="font-weight:700">' + esc(r.MMEAL_SC_NM) + "</div>" : "") +
-          '<ul class="dishes">' + dishes(r).map(function (d) { return "<li>" + esc(d.n) + (d.a ? "<sup>" + esc(d.a) + "</sup>" : "") + "</li>"; }).join("") + "</ul>" +
+          '<ul class="dishes">' + dishes(r).map(function (d) { return '<li title="' + esc(d.n + (d.a ? " (" + d.a + ")" : "")) + '"><span class="dn">' + esc(d.n) + "</span>" + (d.a ? "<sup>" + esc(d.a) + "</sup>" : "") + "</li>"; }).join("") + "</ul>" +
           '<div class="kcal">' + esc(r.CAL_INFO || "") + " · 작은 숫자는 알레르기 유발 식품 번호</div>";
       }).join("");
     } catch (e) { failBox(body, "급식 정보를 불러오지 못했습니다", loadMeal); }
@@ -1257,21 +1258,46 @@ var LINKS = [
       b.innerHTML = "<h3>" + who + "주간 식단 · " + esc(dayLabel(mon)) + " ~ " + esc(dayLabel(fri)) + "</h3>" + html;
     } catch (e) { failBox(b, "주간 식단을 불러오지 못했습니다", openWeekMeal); }
   }
+  // 나이스 학사일정: 오늘부터 날짜순으로 초등학교 + 병설유치원 합쳐 5개
+  // (인증키가 없으면 나이스가 한 번에 5건까지만 주므로, 주 단위(월~금)로 나눠 여러 번 받아 모음)
+  var SCHED_MAX = 5;
+  async function scheduleRows(code) {
+    var t = todayStr();
+    if (CONFIG.NEIS_KEY) {
+      return neis("SchoolSchedule", { ATPT_OFCDC_SC_CODE: CONFIG.NEIS_OFFICE, SD_SCHUL_CODE: code, AA_FROM_YMD: compact(t), AA_TO_YMD: compact(addDays(t, 200)), pSize: 300 });
+    }
+    var rows = [], names = {}, start = t;
+    for (var batch = 0; batch < 5; batch++) {               // 최대 약 30주(한 학년도 남은 기간)
+      var reqs = [];
+      for (var k = 0; k < 6; k++) {
+        var mon = addDays(mondayOf(start), (batch * 6 + k) * 7), from = mon < t ? t : mon, to = addDays(mon, 4);
+        if (from > to) continue;
+        reqs.push(neis("SchoolSchedule", { ATPT_OFCDC_SC_CODE: CONFIG.NEIS_OFFICE, SD_SCHUL_CODE: code, AA_FROM_YMD: compact(from), AA_TO_YMD: compact(to) }).catch(function () { return []; }));
+      }
+      (await Promise.all(reqs)).forEach(function (list) { rows = rows.concat(list); });
+      rows.forEach(function (r) { if (r.EVENT_NM && r.EVENT_NM !== "토요휴업일") names[r.EVENT_NM] = 1; });
+      if (Object.keys(names).length >= SCHED_MAX) break;
+    }
+    return rows;
+  }
+  function pickEvents(rows, kinder) {
+    var seen = {};
+    return rows.filter(function (r) { return r.EVENT_NM && r.EVENT_NM !== "토요휴업일"; })
+      .sort(function (a, b) { return a.AA_YMD < b.AA_YMD ? -1 : 1; })
+      .filter(function (r) { if (seen[r.EVENT_NM]) return false; seen[r.EVENT_NM] = 1; r.kinder = kinder; return true; });   // 방학처럼 여러 날 이어지는 일정은 첫날만
+  }
   async function loadSchedule() {
     var body = $("schedBody"), t = todayStr();
     try {
       var codes = await Promise.all([schoolCode(), kinderCode()]);
-      var range = { ATPT_OFCDC_SC_CODE: CONFIG.NEIS_OFFICE, AA_FROM_YMD: compact(t), AA_TO_YMD: compact(addDays(t, 60)) };
       var lists = await Promise.all([
-        neis("SchoolSchedule", Object.assign({ SD_SCHUL_CODE: codes[0] }, range)),
-        codes[1] && codes[1] !== codes[0] ? neis("SchoolSchedule", Object.assign({ SD_SCHUL_CODE: codes[1] }, range)).catch(function () { return []; }) : Promise.resolve([])
+        scheduleRows(codes[0]),
+        codes[1] && codes[1] !== codes[0] ? scheduleRows(codes[1]).catch(function () { return []; }) : Promise.resolve([])
       ]);
-      lists[1].forEach(function (r) { r.kinder = true; });
-      var seen = {}, ev = lists[0].concat(lists[1]).filter(function (r) {
-        var k = r.AA_YMD + r.EVENT_NM;
-        if (!r.EVENT_NM || r.EVENT_NM === "토요휴업일" || seen[k]) return false; seen[k] = 1; return true;
-      }).sort(function (a, b) { return a.AA_YMD < b.AA_YMD ? -1 : a.AA_YMD > b.AA_YMD ? 1 : (a.kinder ? 1 : -1); }).slice(0, 7);
-      if (!ev.length) { body.innerHTML = '<div class="state">앞으로 두 달간 등록된 학사일정이 없습니다.</div>'; return; }
+      var ev = pickEvents(lists[0], false).concat(pickEvents(lists[1], true))
+        .sort(function (a, b) { return a.AA_YMD < b.AA_YMD ? -1 : a.AA_YMD > b.AA_YMD ? 1 : (a.kinder ? 1 : -1); })
+        .slice(0, SCHED_MAX);
+      if (!ev.length) { body.innerHTML = '<div class="state">나이스에 등록된 남은 학사일정이 없습니다.</div>'; return; }
       body.innerHTML = '<ul class="sched">' + ev.map(function (r) {
         var today = r.AA_YMD === compact(t);
         return '<li class="' + (today ? "today" : "") + '"><span class="d">' + (today ? "오늘" : Number(r.AA_YMD.slice(4, 6)) + "/" + Number(r.AA_YMD.slice(6, 8))) + ' <small>(' + DOW[new Date(+r.AA_YMD.slice(0, 4), +r.AA_YMD.slice(4, 6) - 1, +r.AA_YMD.slice(6, 8)).getDay()] + ")</small>" + "</span><span class=\"ev\" title=\"" + esc(r.EVENT_NM) + "\">" + (r.kinder ? '<span class="kd">유치원</span>' : "") + esc(r.EVENT_NM) + "</span></li>";
