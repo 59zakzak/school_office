@@ -366,6 +366,11 @@ dialog::backdrop{background:rgba(24,38,43,.55)}
 
 .skel{height:16px;border-radius:6px;margin:10px 0;background:linear-gradient(90deg,var(--soft),#E2E8E5,var(--soft));background-size:200% 100%;animation:sk 1.3s linear infinite}
 @keyframes sk{to{background-position:-200% 0}}
+/* ── PDF+복사 ── */
+.hl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pdfbtn{border:1px solid var(--sun);background:color-mix(in srgb,var(--sun) 16%,transparent);color:var(--ink);border-radius:999px;padding:2px 10px;font-size:12.5px;font-weight:700;line-height:1.6}
+.pdfbtn:hover{background:var(--sun);color:#2A1E00}
+:root[data-skin="cute"] .pdfbtn{font-family:var(--head-font);font-weight:400}
 /* ── 금주의 안내 사항 ── */
 .nrow{position:relative;margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:10px}
 .wkbtn{border:1.5px solid var(--pine-2);background:var(--sel-bg);color:var(--pine);border-radius:999px;padding:6px 14px;font-size:13.5px;font-weight:800}
@@ -496,7 +501,7 @@ dialog.popup{width:min(460px,calc(100% - 28px));border-radius:var(--r);backgroun
     <section class="folder" id="notice" aria-labelledby="noticeH">
       <div class="tab">오늘의 일정</div>
       <div class="head">
-        <h2 id="noticeH">오늘의 교육활동</h2>
+        <div class="hl"><h2 id="noticeH">오늘의 교육활동</h2><button type="button" class="pdfbtn" id="pdfBtn" title="일정을 번호 목록으로 복사하고 PDF(인쇄) 창 열기">📄 PDF+복사</button></div>
         <div class="daynav">
           <button type="button" id="prev" aria-label="이전 날">‹</button>
           <span class="lab" id="dayLab"></span>
@@ -625,7 +630,7 @@ var CONFIG = {
   LAT: 35.430, LON: 128.320,
   // Apps Script 웹앱 /exec 주소. 넣으면 ① 일정 추가·수정·삭제가 실제 월중계획 시트에 저장되고
   // ② 체크 현황이 모든 선생님께 공유됩니다. 비워두면 읽기 전용 + 체크는 각자 기기에만 저장됩니다.
-  API_URL: "https://script.google.com/macros/s/AKfycbwzd6BoyF_yBv39SOdb1_ArYGlIILupXmmBZTtUFzvxOxFQ-5XSsCMnHVS9HU21eDXd/exec"
+  API_URL: ""https://script.google.com/macros/s/AKfycbwzd6BoyF_yBv39SOdb1_ArYGlIILupXmmBZTtUFzvxOxFQ-5XSsCMnHVS9HU21eDXd/exec"
 };
 
 var LINKS = [
@@ -768,7 +773,7 @@ var LINKS = [
       if (!t) return;
       var tag = t.match(/^\[(복무|비고)\]\s*(.*)$/);
       if (tag) { (tag[1] === "복무" ? duty : note).push(tag[2]); return; }
-      if (items.length && !/^[▪★•]/.test(t) && /^(\s+-|-|↘|→|ㄴ|\*)/.test(line)) { items[items.length - 1].det.push(t.replace(/^(-|↘|→|ㄴ|\*)\s*/, "")); return; }
+      if (items.length && !/^[▪★•]/.test(t) && (/^(\s+-|-|↘|→|ㄴ|\*)/.test(line) || /^\s+\S/.test(line))) { items[items.length - 1].det.push(t.replace(/^(-|↘|→|ㄴ|\*)\s*/, "")); return; }   // '-', '↘'로 시작하거나 들여쓴 줄은 앞 항목에 이어지는 내용
       var kind = "task", body = t;
       if (/^★/.test(t)) { kind = "week"; body = t.replace(/^★\s*/, ""); }
       else if (/^[▪•·]/.test(t)) body = t.replace(/^[▪•·]\s*/, "");
@@ -1529,6 +1534,54 @@ var LINKS = [
   nextCheer(false);
   $("cheerNext").onclick = function () { nextCheer(true); };
   setInterval(function () { if (!document.hidden) nextCheer(true); }, 60000);
+
+  /* ══ PDF+복사: 그날 일정을 번호 목록으로 복사 + 인쇄용 문서 열기 ══ */
+  function dayItemsForExport() {
+    var n = state.day; if (!n || !n.items.length) return [];
+    return n.items.map(function (it) {
+      return { text: (it.label ? it.label + ": " : "") + it.text, det: it.det || [] };
+    });
+  }
+  function longDate(s) { var d = toDate(s); return d.getFullYear() + "년 " + (d.getMonth() + 1) + "월 " + d.getDate() + "일 " + DOW[d.getDay()] + "요일"; }
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; } catch (e) {
+      var ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e2) {} document.body.removeChild(ta); return ok;
+    }
+  }
+  function printHtml(title, items, copied) {
+    var li = items.map(function (x) {
+      return "<li>" + esc(x.text) + (x.det.length ? "<ul>" + x.det.map(function (d) { return "<li>" + esc(d) + "</li>"; }).join("") + "</ul>" : "") + "</li>";
+    }).join("");
+    return '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+      '<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">' +
+      '<style>@page{size:A4;margin:20mm 18mm}body{font-family:"Pretendard Variable",Pretendard,"Malgun Gothic","Apple SD Gothic Neo",sans-serif;color:#111;margin:0;padding:24px;line-height:1.7}' +
+      '.bar{display:flex;gap:8px;justify-content:flex-end;margin-bottom:18px}.bar button{font:inherit;font-weight:700;border:0;border-radius:8px;padding:8px 14px;cursor:pointer;background:#1E5B4F;color:#fff}.bar .g{background:#e5e7eb;color:#111}.bar .tip{margin-right:auto;align-self:center;color:#555;font-size:13px}.ok{background:#E8F5EE;color:#1E5B4F;border:1px solid #BFE3CF;border-radius:10px;padding:10px 14px;font-weight:700;margin-bottom:12px}' +
+      'h1{font-size:22px;margin:0 0 6px;letter-spacing:-.02em}.sub{color:#555;font-size:13px;margin-bottom:18px;border-bottom:2px solid #111;padding-bottom:10px}' +
+      'ol{padding-left:1.6em;margin:0;font-size:15.5px}ol>li{margin:6px 0;padding-left:.2em}ol ul{margin:2px 0 0;padding-left:1.1em;color:#444;font-size:14px;list-style:"- "}' +
+      '.foot{margin-top:28px;color:#777;font-size:12px;text-align:right}@media print{.bar,.ok{display:none}body{padding:0}}ol>li{word-break:keep-all;overflow-wrap:anywhere}</style></head><body>' +
+      (copied ? '<div class="ok">✅ 오늘 일정이 복사되었습니다. 메신저나 문서에 붙여넣기(Ctrl+V) 하세요.</div>' : "") +
+      '<div class="bar"><span class="tip">PDF로 받으려면 인쇄 창의 대상에서 <b>PDF로 저장</b>을 고르세요.</span><button onclick="window.print()">🖨 인쇄 / PDF로 저장</button><button class="g" onclick="window.close()">닫기</button></div>' +
+      "<h1>" + esc(title) + '</h1><div class="sub">' + esc(CONFIG.NEIS_SCHOOL_NAME || "유곡초등학교") + "</div>" +
+      "<ol>" + li + '</ol><div class="foot">' + esc(CONFIG.TITLE) + "에서 만든 문서</div>" +
+      "<script>window.onload=function(){setTimeout(function(){window.print()},500)}<\/script></body></html>";
+  }
+  $("pdfBtn").onclick = async function () {
+    var items = dayItemsForExport();
+    if (!items.length) { toast("이 날짜에는 복사할 일정이 없습니다."); return; }
+    var title = longDate(state.date) + " 일과 안내";
+    var copy = items.map(function (x, i) { return (i + 1) + ". " + x.text + (x.det.length ? "\n" + x.det.map(function (d) { return "   - " + d; }).join("\n") : ""); }).join("\n");
+    var copied = await copyText(copy);
+    toast(copied ? "오늘 일정이 복사되었습니다." : "복사하지 못했어요. PDF 화면에서 내용을 확인해 주세요.");
+    await new Promise(function (r) { setTimeout(r, 900); });   // 문구를 잠깐 보여 준 뒤 PDF 화면으로
+    var w = window.open("", "_blank");
+    if (w) { w.document.open(); w.document.write(printHtml(title, items, copied)); w.document.close(); }
+    else {   // 새 창이 막힌 경우: 현재 화면에서 바로 인쇄
+      var box = document.createElement("iframe"); box.style.position = "fixed"; box.style.width = "0"; box.style.height = "0"; box.style.border = "0";
+      document.body.appendChild(box); box.contentDocument.open(); box.contentDocument.write(printHtml(title, items).replace(/<script>[\s\S]*?<\/script>/, "")); box.contentDocument.close();
+      setTimeout(function () { box.contentWindow.print(); setTimeout(function () { box.remove(); }, 2000); }, 600);
+    }
+  };
 
   /* ══ 금주의 안내 사항 ══ */
   function parseNotice(text) {
