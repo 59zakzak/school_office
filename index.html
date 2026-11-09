@@ -749,7 +749,7 @@ var LINKS = [
         if (W.every(function (w, k) { return String(v[r][c + k]).trim() === w; })) found = c;
     return found;
   }
-  // 안내 사항: [교장] 칸(위)과 [행정실] 칸(아래)이 나뉘어 있어도, 한 칸에 같이 있어도 모두 합침
+  // 안내 사항: [교장선생님] 칸(위)과 [행정실] 칸(아래)이 나뉘어 있어도, 한 칸에 같이 있어도 모두 합침
   function joinNotice(a, b) {
     a = String(a || "").trim(); b = String(b || "").trim();
     if (!b || a.indexOf(b) >= 0) return a;
